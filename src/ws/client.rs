@@ -5,6 +5,7 @@ use futures::{prelude::*};
 use tokio::{net::TcpStream, sync::mpsc::{Receiver, Sender}};
 use tokio::sync::Mutex;
 use tokio_tungstenite::tungstenite::Message;
+use uuid::Uuid;
 
 use crate::ws::packets::{ErrorType, IncomingPacket, OutgoingPacket};
 
@@ -12,15 +13,17 @@ use crate::ws::packets::{ErrorType, IncomingPacket, OutgoingPacket};
 pub struct WsClient {
     outgoing_stream: Sender<OutgoingPacket>,
     name: String,
+    uuid: Uuid
 }
 
 impl WsClient {
-    pub(super) async fn new(stream: TcpStream) -> Arc<Mutex<WsClient>> {
+    pub(super) async fn new(uuid: Uuid, stream: TcpStream) -> Arc<Mutex<WsClient>> {
         let (outgoing_stream, mut incoming_stream) = tokio::sync::mpsc::channel::<OutgoingPacket>(16);
 
         let mut gamer = Arc::new(Mutex::new(Self {
             outgoing_stream,
             name: Default::default(),
+            uuid
         }));
 
         tokio::spawn(Self::main_loop(gamer.clone(), stream, incoming_stream));

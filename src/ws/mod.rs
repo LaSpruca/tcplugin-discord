@@ -46,9 +46,10 @@ impl WsManager {
 
     fn handle_stream(connections: Arc<Mutex<HashMap<Uuid, Arc<Mutex<WsClient>>>>>, stream: TcpStream) {
         tokio::spawn(async move {
+            let new_uuid = Uuid::new_v4();
             connections.lock().await.insert(
-                Uuid::new_v4(),
-                WsClient::new(stream).await);
+                new_uuid.clone(),
+                WsClient::new(new_uuid, stream).await);
         });
     }
 }
