@@ -1,4 +1,5 @@
 mod client;
+mod packets;
 
 use std::{
     collections::HashMap,
@@ -16,7 +17,7 @@ use uuid::Uuid;
 use crate::ws::client::WsClient;
 
 pub struct WsManager {
-    connections: Arc<Mutex<HashMap<Uuid, Mutex<WsClient>>>>,
+    connections: Arc<Mutex<HashMap<Uuid, Arc<Mutex<WsClient>>>>>,
 }
 
 impl WsManager {
@@ -43,11 +44,11 @@ impl WsManager {
         }
     }
 
-    fn handle_stream(connections: Arc<Mutex<HashMap<Uuid, Mutex<WsClient>>>>, stream: TcpStream) {
+    fn handle_stream(connections: Arc<Mutex<HashMap<Uuid, Arc<Mutex<WsClient>>>>>, stream: TcpStream) {
         tokio::spawn(async move {
             connections.lock().await.insert(
                 Uuid::new_v4(),
-                Mutex::new(WsClient::new(stream).await));
+                WsClient::new(stream).await);
         });
     }
 }
