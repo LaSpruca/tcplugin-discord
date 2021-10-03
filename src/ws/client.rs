@@ -1,59 +1,44 @@
-use std::convert::TryFrom;
-use tokio::sync::broadcast::Receiver;
-use tokio_tungstenite::tungstenite::Message;
-use convert_case::{Case, Casing};
-use uuid::Uuid;
+use tokio::{net::TcpStream, sync::mpsc::Sender};
+use futures::{prelude::*};
+use tokio_tungstenite:: tungstenite::Message;
 
-use super::*;
-
+#[derive(Clone)]
 pub struct WsClient {
-    incoming: Receiver<(WsMessage, WsTarget)>,
-    name: String,
-    uuid: Uuid
+    outgoing_stream: Sender<String>,
 }
 
 impl WsClient {
-    pub async fn new(incoming: Receiver<(WsMessage, WsTarget)>, uuid: Uuid) -> Self {
-        Self {
-            incoming,
-            uuid,
-            name: Default::default(),
-        }
-    }
-
-    pub async fn accept(mut self, stream: TcpStream) {
-        let addr = stream.peer_addr().expect("connected streams should have a peer address");
-        info!("Peer address: {}", addr);
-
+    pub(super) async fn new(stream: TcpStream) -> WsClient {
         let ws_stream = tokio_tungstenite::accept_async(stream)
             .await
             .expect("Error during the websocket handshake occurred");
 
-        info!("New WebSocket connection: {}", addr);
+        let (outgoing_stream, mut incoming_stream) = tokio::sync::mpsc::channel::<String>(16);
 
-        let (write, mut read) = ws_stream.split();
+        let (mut sender, mut reciver) = ws_stream.split();
 
-        loop {
-            tokio::select! {
-                ws_incoming = read.next() => {
-                    if let Message::Text(message) = ws_incoming.unwrap().unwrap() {
-                        self.handle_packet(message);
+        let s = outgoing_stream.clone();
+
+        tokio::spawn(async move {
+            loop {
+                tokio::select! {
+                    packet = reciver.next() => {
+                        if let Some(Ok(Message::Text(message))) = packet {
+                            println!("{}", &message);
+                            s.send(message).await.unwrap();
+                        } else {
+                            println!("Fuk");
+                        }
+                    },
+                    agree = incoming_stream.recv() => {
+                        sender.send(Message::Text(agree.unwrap())).await.unwrap();
                     }
-                },
-                queue_incomming = self.incoming.recv() => {
-                    println!("Received message: {:?}", queue_incomming);
                 }
             }
-        }
-    }
+        });
 
-    fn handle_packet(&mut self, packet: String) {
-        let packet = IncomingPacket::try_from(packet).unwrap();
-        match packet {
-            IncomingPacket::Name(name) => {
-                self.name = name.trim().to_case(Case::Camel).to_string();
-                println!("Name {}", name);
-            }
+        Self {
+            outgoing_stream
         }
     }
 }
