@@ -1,23 +1,32 @@
-mod client;
-mod packets;
-
 use std::{
     collections::HashMap,
     env,
     sync::Arc,
 };
 
+use anyhow::Error;
 use tokio::{
     net::{
         TcpListener, TcpStream,
     },
     sync::Mutex,
-    };
+};
 use uuid::Uuid;
+
 use crate::ws::client::WsClient;
 
+mod client;
+mod packets;
+
 pub struct WsManager {
-    connections: Arc<Mutex<HashMap<Uuid, Arc<Mutex<WsClient>>>>>,
+    connections: Am<HashMap<Uuid, Am<WsClient>>>,
+}
+
+pub type Am<T> = Arc<Mutex<T>>;
+
+#[macro_export]
+macro_rules! am {
+    ($a:expr) => {Arc::new(Mutex::new($a))};
 }
 
 impl WsManager {
@@ -29,7 +38,7 @@ impl WsManager {
         let try_socket = TcpListener::bind(&addr).await;
         let listener = try_socket.expect("Failed to bind");
 
-        let connections = Arc::new(Mutex::new(HashMap::new()));
+        let connections = am!(HashMap::new());
         let connections2 = connections.clone();
 
         tokio::spawn(async move {
@@ -44,12 +53,25 @@ impl WsManager {
         }
     }
 
-    fn handle_stream(connections: Arc<Mutex<HashMap<Uuid, Arc<Mutex<WsClient>>>>>, stream: TcpStream) {
+    fn handle_stream(connections: Am<HashMap<Uuid, Am<WsClient>>>, stream: TcpStream) {
         tokio::spawn(async move {
             let new_uuid = Uuid::new_v4();
             connections.lock().await.insert(
                 new_uuid.clone(),
                 WsClient::new(new_uuid, stream).await);
         });
+    }
+
+    async fn get_server_uuid(&self, uuid: Uuid) -> Option<Am<WsClient>> {
+        if let Some(connection) = self.connections.lock().await.get(&uuid) {
+            return Some(connection.to_owned());
+        } else {
+            return None;
+        }
+    }
+
+    async fn get_server_by_name(&self, name: &str) -> Option<Am<WsClient>> {
+        self.connections.lock().await.iter().filter(|(_, value)| { value.name == name });
+        None
     }
 }

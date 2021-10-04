@@ -12,7 +12,7 @@ use crate::ws::packets::{ErrorType, IncomingPacket, OutgoingPacket};
 #[derive(Clone)]
 pub struct WsClient {
     outgoing_stream: Sender<OutgoingPacket>,
-    name: String,
+    pub(super) name: String,
     uuid: Uuid
 }
 
