@@ -1,14 +1,7 @@
-use std::{
-    collections::HashMap,
-    env,
-    sync::Arc,
-};
+use std::{collections::HashMap, env, sync::Arc};
 
-use anyhow::Error;
 use tokio::{
-    net::{
-        TcpListener, TcpStream,
-    },
+    net::{TcpListener, TcpStream},
     sync::Mutex,
 };
 use uuid::Uuid;
@@ -26,13 +19,16 @@ pub type Am<T> = Arc<Mutex<T>>;
 
 #[macro_export]
 macro_rules! am {
-    ($a:expr) => {Arc::new(Mutex::new($a))};
+    ($a:expr) => {
+        Arc::new(Mutex::new($a))
+    };
 }
 
 impl WsManager {
     pub async fn new() -> Self {
-        let _ = env_logger::try_init();
-        let addr = env::args().nth(1).unwrap_or_else(|| "127.0.0.1:8080".to_string());
+        let addr = env::args()
+            .nth(1)
+            .unwrap_or_else(|| "127.0.0.1:8080".to_string());
 
         // Create the event loop and TCP listener we'll accept connections on.
         let try_socket = TcpListener::bind(&addr).await;
@@ -48,30 +44,65 @@ impl WsManager {
             }
         });
 
-        Self {
-            connections
-        }
+        Self { connections }
     }
 
     fn handle_stream(connections: Am<HashMap<Uuid, Am<WsClient>>>, stream: TcpStream) {
         tokio::spawn(async move {
             let new_uuid = Uuid::new_v4();
-            connections.lock().await.insert(
-                new_uuid.clone(),
-                WsClient::new(new_uuid, stream).await);
+            connections
+                .lock()
+                .await
+                .insert(new_uuid.clone(), WsClient::new(new_uuid, stream).await);
         });
     }
 
-    async fn get_server_uuid(&self, uuid: Uuid) -> Option<Am<WsClient>> {
-        if let Some(connection) = self.connections.lock().await.get(&uuid) {
-            return Some(connection.to_owned());
-        } else {
-            return None;
-        }
+    pub async fn get_connected_by_guild(&self, guild_id: String) -> Vec<(Uuid, Am<WsClient>)> {
+        self.connections
+            .lock()
+            .await
+            .iter()
+            .filter(|(_, connection)|
+                futures::executor::block_on(async {
+                    &connection.lock().await.guild_id == &guild_id
+                }
+                )
+            )
+            .map(|(e, connection)| {
+                (e.to_owned(), connection.to_owned())
+            })
+            .collect::<Vec<(Uuid, Am<WsClient>)>>()
     }
 
-    async fn get_server_by_name(&self, name: &str) -> Option<Am<WsClient>> {
-        self.connections.lock().await.iter().filter(|(_, value)| { value.name == name });
-        None
+    pub async fn get_connection_by_name(&self, name: String, guild_id: String) -> Am<WsClient> {
+        self.connections
+            .lock()
+            .await
+            .iter()
+            .filter(|(_, connection)|
+                futures::executor::block_on(async {
+                    let lock = connection.lock().await;
+                    &lock.guild_id == &guild_id && &lock.name == &name
+                }
+                )
+            )
+            .next()
+            .unwrap()
+            .1
+            .to_owned()
+    }
+
+
+    pub async fn get_connection_by_uuid(&self, uuid: Uuid) -> Am<WsClient> {
+        self.connections
+            .lock()
+            .await
+            .iter()
+            .filter(|(e, connection)|
+                futures::executor::block_on(async { e.to_owned() == &uuid }))
+            .next()
+            .unwrap()
+            .1
+            .to_owned()
     }
 }

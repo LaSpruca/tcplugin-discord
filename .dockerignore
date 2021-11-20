@@ -1,0 +1,9 @@
+target
+log
+.idea
+.vscode
+Dockerfile
+.git
+.gitignore
+Cargo.lock
+.dockerignore

@@ -9,13 +9,16 @@ convert_case = "0.4.0"
 dotenv = "0.15.0"
 futures-util = "0.3.17"
 log = "0.4.14"
+log4rs = "*"
+twilight-cache-inmemory = "*"
+twilight-gateway = "*"
+twilight-http = "*"
+twilight-model = "*"
+twilight-embed-builder = "*"
 serde_json = "1.0.68"
 thiserror = "1.0.29"
 tokio-tungstenite = "0.15.0"
 futures = "*"
-tracing = "0.1.23"
-tracing-subscriber = "0.2"
-env_logger = "0.9.0"
 serde_yaml = "*"
 
 [dependencies.uuid]
@@ -30,8 +33,3 @@ version = "1"
 [dependencies.tokio]
 version = "1"
 features = ["full"]
-
-[dependencies.serenity]
-features = ["cache", "framework", "standard_framework", "rustls_backend"]
-version = "*"
-
