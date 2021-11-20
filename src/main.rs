@@ -1,8 +1,8 @@
+pub mod discord;
+pub mod ws;
+
 use std::sync::Arc;
 use tokio::sync::Mutex;
-
-mod ws;
-mod discord;
 
 #[tokio::main]
 async fn main() {

@@ -1,15 +1,16 @@
-use std::{collections::HashMap, env, sync::Arc};
+mod client;
+mod packets;
 
+use crate::ws::client::WsClient;
+use regex::Regex;
+use std::{collections::HashMap, env, sync::Arc};
+use std::time::Duration;
+use log::{debug, info};
 use tokio::{
     net::{TcpListener, TcpStream},
     sync::Mutex,
 };
 use uuid::Uuid;
-
-use crate::ws::client::WsClient;
-
-mod client;
-mod packets;
 
 pub struct WsManager {
     connections: Am<HashMap<Uuid, Am<WsClient>>>,
@@ -38,9 +39,30 @@ impl WsManager {
         let connections2 = connections.clone();
 
         tokio::spawn(async move {
-            while let Ok((stream, _)) = listener.accept().await {
+            while let Ok((stream, addr)) = listener.accept().await {
                 let connections3 = connections2.clone();
                 Self::handle_stream(connections3, stream);
+                info!("New connection from {}", addr);
+            }
+        });
+
+        let connections2 = connections.clone();
+        tokio::spawn(async move {
+            loop {
+                tokio::time::sleep(Duration::from_secs(10)).await;
+                let mut connections = connections2.lock().await;
+                for (id, _) in connections
+                    .clone()
+                    .iter()
+                    .filter(|(_, client)| futures::executor::block_on(async {
+                        !client
+                            .lock()
+                            .await
+                            .alive})) {
+                    connections.remove(id);
+                    info!("Removing dead client {}", id);
+                }
+                drop(connections);
             }
         });
 
@@ -62,44 +84,63 @@ impl WsManager {
             .lock()
             .await
             .iter()
-            .filter(|(_, connection)|
+            .filter(|(_, connection)| {
                 futures::executor::block_on(async {
                     &connection.lock().await.guild_id == &guild_id
-                }
-                )
-            )
-            .map(|(e, connection)| {
-                (e.to_owned(), connection.to_owned())
+                })
             })
+            .map(|(e, connection)| (e.to_owned(), connection.to_owned()))
             .collect::<Vec<(Uuid, Am<WsClient>)>>()
     }
-
-    pub async fn get_connection_by_name(&self, name: String, guild_id: String) -> Am<WsClient> {
+    pub async fn get_connections_by_regex(
+        &self,
+        regex: Regex,
+        guild_id: String,
+    ) -> Vec<(Uuid, Am<WsClient>)> {
         self.connections
             .lock()
             .await
             .iter()
-            .filter(|(_, connection)|
+            .filter(|(_, connection)| {
                 futures::executor::block_on(async {
                     let lock = connection.lock().await;
-                    &lock.guild_id == &guild_id && &lock.name == &name
-                }
-                )
-            )
-            .next()
-            .unwrap()
-            .1
+                    &lock.guild_id == &guild_id && regex.is_match(&lock.name)
+                })
+            })
+            .map(|(a, b)| (a.to_owned(), b.to_owned()))
+            .collect::<Vec<(Uuid, Am<WsClient>)>>()
             .to_owned()
     }
 
+    pub async fn get_connection_by_name(
+        &self,
+        name: String,
+        guild_id: String,
+    ) -> Option<(Uuid, Am<WsClient>)> {
+        match self
+            .connections
+            .lock()
+            .await
+            .iter()
+            .filter(|(_, connection)| {
+                futures::executor::block_on(async {
+                    let lock = connection.lock().await;
+                    &lock.guild_id == &guild_id && &lock.name == &name
+                })
+            })
+            .next()
+        {
+            Some((a, b)) => Some((a.to_owned(), b.to_owned())),
+            None => None,
+        }
+    }
 
     pub async fn get_connection_by_uuid(&self, uuid: Uuid) -> Am<WsClient> {
         self.connections
             .lock()
             .await
             .iter()
-            .filter(|(e, connection)|
-                futures::executor::block_on(async { e.to_owned() == &uuid }))
+            .filter(|(e, connection)| futures::executor::block_on(async { e.to_owned() == &uuid }))
             .next()
             .unwrap()
             .1

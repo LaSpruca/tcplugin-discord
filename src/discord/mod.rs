@@ -1,17 +1,23 @@
-mod server_command;
+pub mod server_command;
 
-use std::{env, error::Error, sync::Arc};
-use futures::stream::StreamExt;
-use twilight_cache_inmemory::{InMemoryCache, ResourceType};
-use twilight_gateway::{cluster::{Cluster, ShardScheme}, Event};
-use twilight_http::Client as HttpClient;
-use twilight_model::gateway::Intents;
-use twilight_model::id::GuildId;
-use log::{info, debug};
-use twilight_embed_builder::{EmbedBuilder, EmbedFieldBuilder};
-use twilight_model::channel::embed::{Embed, EmbedAuthor, EmbedField};
 use crate::discord::server_command::ServerCommand;
 use crate::ws::{Am, WsManager};
+use futures::stream::StreamExt;
+use log::{debug, info};
+use regex::Regex;
+use std::future::Future;
+use std::{env, error::Error, sync::Arc};
+use twilight_cache_inmemory::{InMemoryCache, ResourceType};
+use twilight_embed_builder::{EmbedBuilder, EmbedFieldBuilder};
+use twilight_gateway::{
+    cluster::{Cluster, ShardScheme},
+    Event,
+};
+use twilight_http::Client as HttpClient;
+use twilight_model::channel::embed::{Embed, EmbedAuthor, EmbedField};
+use twilight_model::gateway::Intents;
+use twilight_model::id::GuildId;
+use uuid::Uuid;
 
 pub async fn main(ws_mgr: Am<WsManager>) -> Result<(), Box<dyn Error + Send + Sync>> {
     let token = env::var("DISCORD_TOKEN")?;
@@ -73,27 +79,86 @@ async fn handle_event(
     match event {
         // Server control commands
         Event::MessageCreate(msg) if msg.content.starts_with("```yaml") => {
-            let command = msg.content.strip_prefix("```yaml\n").unwrap().strip_suffix("```").unwrap();
+            info!("Got server command");
+
+            let command = msg
+                .content
+                .strip_prefix("```yaml\n")
+                .unwrap()
+                .strip_suffix("```")
+                .unwrap();
             let executable: ServerCommand = match serde_yaml::from_str(command) {
                 Ok(a) => a,
                 Err(e) => {
-                    http.create_message(msg.channel_id).content(&format!(":x: Error running command: \n{}", e));
+                    http.create_message(msg.channel_id)
+                        .content(&format!(":x: Error running command: \n{}", e))?;
                     return Ok(());
                 }
             };
-            debug!("{:?}", executable);
+
+            let server_selector = match Regex::new(&executable.on) {
+                Ok(server_selector) => {
+                    ws_mgr
+                        .lock()
+                        .await
+                        .get_connections_by_regex(
+                            server_selector,
+                            msg.guild_id.unwrap().to_string(),
+                        )
+                        .await
+                }
+                Err(error) => {
+                    match ws_mgr
+                        .lock()
+                        .await
+                        .get_connection_by_name(executable.on.clone(), msg.guild_id.unwrap().to_string())
+                        .await
+                    {
+                        Some(x) => vec![x],
+                        None => vec![],
+                    }
+                }
+            };
+
+            info!("{}", server_selector.len());
+
+            if server_selector.is_empty() {
+                debug!("No servers found");
+                http.create_message(msg.channel_id).content(&format!("Unable to find any servers using query {}", &executable.on)).unwrap().exec().await?;
+                return Ok(());
+            }
+
+            for server in server_selector {
+                debug!("Sending to {}", server.0);
+                server.1.lock().await.send_server_command(executable.clone());
+            }
         }
         // Global command (does not affect 1 server)
         Event::MessageCreate(msg) if msg.content.starts_with("/") => {
-            let command = msg.content.strip_prefix("/").unwrap().split(" ").next().unwrap_or(msg.content.strip_prefix("/").unwrap());
+            let command = msg
+                .content
+                .strip_prefix("/")
+                .unwrap()
+                .split(" ")
+                .next()
+                .unwrap_or(msg.content.strip_prefix("/").unwrap());
             if command == "list" {
                 let mut fields = vec![];
-                for (uuid, k) in ws_mgr.lock().await.get_connected_by_guild(msg.guild_id.unwrap().to_string()).await {
-                    fields.push(EmbedFieldBuilder::new(k.lock().await.get_name(), uuid.to_string()).build());
+                for (uuid, k) in ws_mgr
+                    .lock()
+                    .await
+                    .get_connected_by_guild(msg.guild_id.unwrap().to_string())
+                    .await
+                {
+                    fields.push(
+                        EmbedFieldBuilder::new(k.lock().await.get_name(), uuid.to_string()).build(),
+                    );
                 }
-                http
-                    .create_message(msg.channel_id)
-                    .embeds(&[Embed { fields, ..EmbedBuilder::new().title("Active Server").build().unwrap() }])
+                http.create_message(msg.channel_id)
+                    .embeds(&[Embed {
+                        fields,
+                        ..EmbedBuilder::new().title("Active Server").build().unwrap()
+                    }])
                     .unwrap()
                     .exec()
                     .await
@@ -102,16 +167,18 @@ async fn handle_event(
         }
 
         Event::ShardConnected(_) => {
-            info!("Connected on shard {} as {}", shard_id,
-                http
-                .current_user_application()
-                .exec()
-                .await
-                .unwrap()
-                .model()
-                .await
-                .unwrap()
-                .name);
+            info!(
+                "Connected on shard {} as {}",
+                shard_id,
+                http.current_user_application()
+                    .exec()
+                    .await
+                    .unwrap()
+                    .model()
+                    .await
+                    .unwrap()
+                    .name
+            );
         }
         _ => {}
     }

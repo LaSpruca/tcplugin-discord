@@ -20,6 +20,7 @@ thiserror = "1.0.29"
 tokio-tungstenite = "0.15.0"
 futures = "*"
 serde_yaml = "*"
+regex = "*"
 
 [dependencies.uuid]
 version = "*"

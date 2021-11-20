@@ -1,15 +1,14 @@
+use serde::{Deserialize, Serialize};
 use std::{collections::HashMap, default::Default};
 
-use serde::{Deserialize, Serialize};
-
-#[derive(Deserialize, Serialize, Debug)]
+#[derive(Deserialize, Serialize, Debug, Clone)]
 pub struct ServerCommand {
     #[serde(skip_serializing)]
-    on: String,
+    pub on: String,
     #[serde(default = "Default::default")]
-    run: Vec<String>,
+    pub run: Vec<String>,
     #[serde(default = "Default::default")]
-    query: Vec<String>,
+    pub query: Vec<String>,
     #[serde(default = "Default::default")]
-    set: HashMap<String, String>,
+    pub set: HashMap<String, String>,
 }

@@ -1,13 +1,11 @@
 use anyhow::anyhow;
-use serde::{Deserialize};
+use serde::Deserialize;
 
 macro_rules! parse_packet {
     ($a:ident) => {
         match serde_json::from_str(&$a) {
-            Err(e) => {
-                return IncomingPacket::Invalid(anyhow!(e))
-            }
-            Ok(a) => a
+            Err(e) => return IncomingPacket::Invalid(anyhow!(e)),
+            Ok(a) => a,
         }
     };
 }
@@ -54,7 +52,7 @@ pub enum IncomingPacket {
 impl From<String> for IncomingPacket {
     fn from(source: String) -> Self {
         let PacketBase { id } = match serde_json::from_str::<PacketBase>(&source) {
-            Ok(x) => { x }
+            Ok(x) => x,
             Err(err) => {
                 return IncomingPacket::Invalid(anyhow!(err));
             }
@@ -69,9 +67,7 @@ impl From<String> for IncomingPacket {
                 let SetServerPacket { guild_id } = parse_packet!(source);
                 IncomingPacket::SetServer(guild_id)
             }
-            _ => {
-                IncomingPacket::InvalidID
-            }
+            _ => IncomingPacket::InvalidID,
         }
     }
 }
