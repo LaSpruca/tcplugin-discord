@@ -2,10 +2,10 @@ mod client;
 mod packets;
 
 use crate::ws::client::WsClient;
-use regex::Regex;
-use std::{collections::HashMap, env, sync::Arc};
-use std::time::Duration;
 use log::{debug, info};
+use regex::Regex;
+use std::time::Duration;
+use std::{collections::HashMap, env, sync::Arc};
 use tokio::{
     net::{TcpListener, TcpStream},
     sync::Mutex,
@@ -51,14 +51,9 @@ impl WsManager {
             loop {
                 tokio::time::sleep(Duration::from_secs(10)).await;
                 let mut connections = connections2.lock().await;
-                for (id, _) in connections
-                    .clone()
-                    .iter()
-                    .filter(|(_, client)| futures::executor::block_on(async {
-                        !client
-                            .lock()
-                            .await
-                            .alive})) {
+                for (id, _) in connections.clone().iter().filter(|(_, client)| {
+                    futures::executor::block_on(async { !client.lock().await.alive })
+                }) {
                     connections.remove(id);
                     info!("Removing dead client {}", id);
                 }
@@ -97,19 +92,21 @@ impl WsManager {
         regex: Regex,
         guild_id: String,
     ) -> Vec<(Uuid, Am<WsClient>)> {
-        self.connections
+        let mut filtered = self.connections
             .lock()
             .await
             .iter()
             .filter(|(_, connection)| {
                 futures::executor::block_on(async {
                     let lock = connection.lock().await;
-                    &lock.guild_id == &guild_id && regex.is_match(&lock.name)
+                    let a = &lock.guild_id == &guild_id;
+                    let b = regex.is_match(&lock.name);
+                    a && b
                 })
-            })
-            .map(|(a, b)| (a.to_owned(), b.to_owned()))
-            .collect::<Vec<(Uuid, Am<WsClient>)>>()
-            .to_owned()
+            }).map(|(a, b)| (a.to_owned(), b.to_owned()))
+            .collect::<Vec<(Uuid, Am<WsClient>)>>();
+
+        filtered
     }
 
     pub async fn get_connection_by_name(

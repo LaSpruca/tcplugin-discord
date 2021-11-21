@@ -1,6 +1,6 @@
+use crate::discord::server_command::ServerCommand;
 use serde::ser::SerializeStruct;
 use serde::{Serialize, Serializer};
-use crate::discord::server_command::ServerCommand;
 
 #[derive(Serialize)]
 pub enum ErrorType {

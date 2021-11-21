@@ -8,7 +8,7 @@ use regex::Regex;
 use std::future::Future;
 use std::{env, error::Error, sync::Arc};
 use twilight_cache_inmemory::{InMemoryCache, ResourceType};
-use twilight_embed_builder::{EmbedBuilder, EmbedFieldBuilder};
+use twilight_embed_builder::{EmbedBuilder, EmbedError, EmbedFieldBuilder};
 use twilight_gateway::{
     cluster::{Cluster, ShardScheme},
     Event,
@@ -70,6 +70,14 @@ pub async fn main(ws_mgr: Am<WsManager>) -> Result<(), Box<dyn Error + Send + Sy
     Ok(())
 }
 
+fn create_error(title: &str, error: &str) -> Result<Embed, EmbedError> {
+    EmbedBuilder::new()
+        .color(0xda2b46)
+        .title(&format!(":x: {}", title))
+        .field(EmbedFieldBuilder::new("Error", error).build())
+        .build()
+}
+
 async fn handle_event(
     shard_id: u64,
     event: Event,
@@ -91,7 +99,9 @@ async fn handle_event(
                 Ok(a) => a,
                 Err(e) => {
                     http.create_message(msg.channel_id)
-                        .content(&format!(":x: Error running command: \n{}", e))?;
+                        .embeds(&[create_error("Error parsing command", &format!("{}", e))?])?
+                        .exec()
+                        .await?;
                     return Ok(());
                 }
             };
@@ -111,7 +121,10 @@ async fn handle_event(
                     match ws_mgr
                         .lock()
                         .await
-                        .get_connection_by_name(executable.on.clone(), msg.guild_id.unwrap().to_string())
+                        .get_connection_by_name(
+                            executable.on.clone(),
+                            msg.guild_id.unwrap().to_string(),
+                        )
                         .await
                     {
                         Some(x) => vec![x],
@@ -124,13 +137,22 @@ async fn handle_event(
 
             if server_selector.is_empty() {
                 debug!("No servers found");
-                http.create_message(msg.channel_id).content(&format!("Unable to find any servers using query {}", &executable.on)).unwrap().exec().await?;
+                http.create_message(msg.channel_id)
+                    .embeds(&[create_error("Could not find any servers", &format!("No servers matched the query {}", &executable.on))?])
+                    .unwrap()
+                    .exec()
+                    .await?;
                 return Ok(());
             }
 
             for server in server_selector {
                 debug!("Sending to {}", server.0);
-                server.1.lock().await.send_server_command(executable.clone());
+                server
+                    .1
+                    .lock()
+                    .await
+                    .send_server_command(executable.clone())
+                    .await;
             }
         }
         // Global command (does not affect 1 server)

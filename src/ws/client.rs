@@ -1,5 +1,6 @@
 use std::sync::Arc;
 
+use crate::discord::server_command::ServerCommand;
 use futures::prelude::*;
 use log::{debug, error, info};
 use tokio::sync::Mutex;
@@ -9,7 +10,6 @@ use tokio::{
 };
 use tokio_tungstenite::tungstenite::Message;
 use uuid::Uuid;
-use crate::discord::server_command::ServerCommand;
 
 use crate::ws::packets::{ErrorType, IncomingPacket, OutgoingPacket};
 
@@ -32,7 +32,7 @@ impl WsClient {
             name: Default::default(),
             guild_id: Default::default(),
             uuid,
-            alive: true
+            alive: true,
         }));
 
         tokio::spawn(Self::main_loop(gamer.clone(), stream, incoming_stream));
@@ -112,7 +112,9 @@ impl WsClient {
     }
 
     pub async fn send_server_command(&self, exec: ServerCommand) {
-        self.outgoing_stream.send(OutgoingPacket::ServerRun(exec)).await;
+        self.outgoing_stream
+            .send(OutgoingPacket::ServerRun(exec))
+            .await;
     }
 
     pub fn get_name(&self) -> String {
