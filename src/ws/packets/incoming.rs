@@ -37,14 +37,14 @@ struct SetNamePacket {
 #[derive(Deserialize, Debug)]
 #[serde(rename_all = "camelCase")]
 struct SetServerPacket {
-    guild_id: String,
+    ctrl_channel_id: String,
 }
 
 /// Struct to represent any incoming packet
 #[derive(Debug)]
 pub enum IncomingPacket {
     SetName(String),
-    SetServer(String),
+    SetControlChannel(String),
     InvalidID,
     Invalid(anyhow::Error),
 }
@@ -64,8 +64,8 @@ impl From<String> for IncomingPacket {
                 IncomingPacket::SetName(name)
             }
             1 => {
-                let SetServerPacket { guild_id } = parse_packet!(source);
-                IncomingPacket::SetServer(guild_id)
+                let SetServerPacket { ctrl_channel_id } = parse_packet!(source);
+                IncomingPacket::SetControlChannel(ctrl_channel_id)
             }
             _ => IncomingPacket::InvalidID,
         }

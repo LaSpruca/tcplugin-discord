@@ -2,7 +2,7 @@ mod client;
 mod packets;
 
 use crate::ws::client::WsClient;
-use log::{debug, info};
+use log:: info;
 use regex::Regex;
 use std::time::Duration;
 use std::{collections::HashMap, env, sync::Arc};
@@ -10,10 +10,12 @@ use tokio::{
     net::{TcpListener, TcpStream},
     sync::Mutex,
 };
+use twilight_http::client::Client as HttpClient;
 use uuid::Uuid;
 
 pub struct WsManager {
     connections: Am<HashMap<Uuid, Am<WsClient>>>,
+    get_http: Am<Option<Arc<HttpClient>>>,
 }
 
 pub type Am<T> = Arc<Mutex<T>>;
@@ -37,16 +39,29 @@ impl WsManager {
 
         let connections = am!(HashMap::new());
         let connections2 = connections.clone();
+        let get_discord: Arc<Mutex<Option<Arc<HttpClient>>>> = am!(None);
+        let get_discord2 = get_discord.clone();
 
         tokio::spawn(async move {
+            loop {
+                let k = get_discord2.clone();
+                let lock = k.lock().await;
+                if lock.is_some() {
+                    break;
+                }
+                tokio::time::sleep(Duration::from_secs_f32(0.5)).await;
+            }
             while let Ok((stream, addr)) = listener.accept().await {
                 let connections3 = connections2.clone();
-                Self::handle_stream(connections3, stream);
+                let get_http = get_discord2.clone();
+                let locked = get_http.lock().await;
+                Self::handle_stream(connections3, (*locked).as_ref().unwrap().clone(), stream);
                 info!("New connection from {}", addr);
             }
         });
 
         let connections2 = connections.clone();
+
         tokio::spawn(async move {
             loop {
                 tokio::time::sleep(Duration::from_secs(10)).await;
@@ -61,27 +76,34 @@ impl WsManager {
             }
         });
 
-        Self { connections }
+        Self {
+            connections,
+            get_http: get_discord,
+        }
     }
 
-    fn handle_stream(connections: Am<HashMap<Uuid, Am<WsClient>>>, stream: TcpStream) {
+    fn handle_stream(
+        connections: Am<HashMap<Uuid, Am<WsClient>>>,
+        http: Arc<HttpClient>,
+        stream: TcpStream,
+    ) {
         tokio::spawn(async move {
             let new_uuid = Uuid::new_v4();
-            connections
-                .lock()
-                .await
-                .insert(new_uuid.clone(), WsClient::new(new_uuid, stream).await);
+            connections.lock().await.insert(
+                new_uuid.clone(),
+                WsClient::new(new_uuid, http, stream).await,
+            );
         });
     }
 
-    pub async fn get_connected_by_guild(&self, guild_id: String) -> Vec<(Uuid, Am<WsClient>)> {
+    pub async fn get_connected_by_ctrl_channel_id(&self, ctrl_channel_id: String) -> Vec<(Uuid, Am<WsClient>)> {
         self.connections
             .lock()
             .await
             .iter()
             .filter(|(_, connection)| {
                 futures::executor::block_on(async {
-                    &connection.lock().await.guild_id == &guild_id
+                    &connection.lock().await.ctrl_channel_id == &ctrl_channel_id
                 })
             })
             .map(|(e, connection)| (e.to_owned(), connection.to_owned()))
@@ -90,29 +112,29 @@ impl WsManager {
     pub async fn get_connections_by_regex(
         &self,
         regex: Regex,
-        guild_id: String,
+        ctrl_channel_id: String,
     ) -> Vec<(Uuid, Am<WsClient>)> {
-        let mut filtered = self.connections
+        self
+            .connections
             .lock()
             .await
             .iter()
             .filter(|(_, connection)| {
                 futures::executor::block_on(async {
                     let lock = connection.lock().await;
-                    let a = &lock.guild_id == &guild_id;
+                    let a = &lock.ctrl_channel_id == &ctrl_channel_id;
                     let b = regex.is_match(&lock.name);
                     a && b
                 })
-            }).map(|(a, b)| (a.to_owned(), b.to_owned()))
-            .collect::<Vec<(Uuid, Am<WsClient>)>>();
-
-        filtered
+            })
+            .map(|(a, b)| (a.to_owned(), b.to_owned()))
+            .collect::<Vec<(Uuid, Am<WsClient>)>>()
     }
 
     pub async fn get_connection_by_name(
         &self,
         name: String,
-        guild_id: String,
+        ctrl_channel_id: String,
     ) -> Option<(Uuid, Am<WsClient>)> {
         match self
             .connections
@@ -122,7 +144,7 @@ impl WsManager {
             .filter(|(_, connection)| {
                 futures::executor::block_on(async {
                     let lock = connection.lock().await;
-                    &lock.guild_id == &guild_id && &lock.name == &name
+                    &lock.ctrl_channel_id == &ctrl_channel_id && &lock.name == &name
                 })
             })
             .next()
@@ -132,15 +154,7 @@ impl WsManager {
         }
     }
 
-    pub async fn get_connection_by_uuid(&self, uuid: Uuid) -> Am<WsClient> {
-        self.connections
-            .lock()
-            .await
-            .iter()
-            .filter(|(e, connection)| futures::executor::block_on(async { e.to_owned() == &uuid }))
-            .next()
-            .unwrap()
-            .1
-            .to_owned()
+    pub async fn set_get_http(&mut self, fun: Arc<HttpClient>) {
+        *self.get_http.lock().await = Some(fun);
     }
 }

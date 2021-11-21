@@ -1,23 +1,24 @@
 pub mod server_command;
 
-use crate::discord::server_command::ServerCommand;
-use crate::ws::{Am, WsManager};
+use crate::{
+    discord::server_command::ServerCommand,
+    ws::{Am, WsManager},
+};
 use futures::stream::StreamExt;
-use log::{debug, info};
+use log::{debug, error, info};
 use regex::Regex;
-use std::future::Future;
 use std::{env, error::Error, sync::Arc};
 use twilight_cache_inmemory::{InMemoryCache, ResourceType};
-use twilight_embed_builder::{EmbedBuilder, EmbedError, EmbedFieldBuilder};
+use twilight_embed_builder::{EmbedAuthorBuilder, EmbedBuilder, EmbedError, EmbedFieldBuilder};
 use twilight_gateway::{
     cluster::{Cluster, ShardScheme},
     Event,
 };
 use twilight_http::Client as HttpClient;
-use twilight_model::channel::embed::{Embed, EmbedAuthor, EmbedField};
-use twilight_model::gateway::Intents;
-use twilight_model::id::GuildId;
-use uuid::Uuid;
+use twilight_model::{
+    channel::embed::{Embed, EmbedField},
+    gateway::Intents,
+};
 
 pub async fn main(ws_mgr: Am<WsManager>) -> Result<(), Box<dyn Error + Send + Sync>> {
     let token = env::var("DISCORD_TOKEN")?;
@@ -55,8 +56,6 @@ pub async fn main(ws_mgr: Am<WsManager>) -> Result<(), Box<dyn Error + Send + Sy
         .resource_types(ResourceType::MESSAGE)
         .build();
 
-    http.guild_members(GuildId::new(632402187112153088).unwrap());
-
     // Process each event as they come in.
     while let Some((shard_id, event)) = events.next().await {
         // Update the cache with the event.
@@ -70,12 +69,31 @@ pub async fn main(ws_mgr: Am<WsManager>) -> Result<(), Box<dyn Error + Send + Sy
     Ok(())
 }
 
-fn create_error(title: &str, error: &str) -> Result<Embed, EmbedError> {
+pub fn create_error_embed(title: &str, error: &str) -> Result<Embed, EmbedError> {
     EmbedBuilder::new()
         .color(0xda2b46)
         .title(&format!(":x: {}", title))
         .field(EmbedFieldBuilder::new("Error", error).build())
         .build()
+}
+
+pub fn create_embed(
+    title: &str,
+    author: Option<&str>,
+    fields: Vec<EmbedField>,
+) -> Result<Embed, EmbedError> {
+    Ok(Embed {
+        fields,
+        ..if let Some(author) = author {
+            EmbedBuilder::new()
+                .color(0x78b064)
+                .title(title)
+                .author(EmbedAuthorBuilder::new().name(author).build())
+                .build()?
+        } else {
+            EmbedBuilder::new().color(0x78b064).title(title).build()?
+        }
+    })
 }
 
 async fn handle_event(
@@ -99,7 +117,10 @@ async fn handle_event(
                 Ok(a) => a,
                 Err(e) => {
                     http.create_message(msg.channel_id)
-                        .embeds(&[create_error("Error parsing command", &format!("{}", e))?])?
+                        .embeds(&[create_error_embed(
+                            "Error parsing command",
+                            &format!("{}", e),
+                        )?])?
                         .exec()
                         .await?;
                     return Ok(());
@@ -113,17 +134,17 @@ async fn handle_event(
                         .await
                         .get_connections_by_regex(
                             server_selector,
-                            msg.guild_id.unwrap().to_string(),
+                            msg.channel_id.to_string(),
                         )
                         .await
                 }
-                Err(error) => {
+                Err(_) => {
                     match ws_mgr
                         .lock()
                         .await
                         .get_connection_by_name(
                             executable.on.clone(),
-                            msg.guild_id.unwrap().to_string(),
+                            msg.channel_id.to_string(),
                         )
                         .await
                     {
@@ -138,7 +159,10 @@ async fn handle_event(
             if server_selector.is_empty() {
                 debug!("No servers found");
                 http.create_message(msg.channel_id)
-                    .embeds(&[create_error("Could not find any servers", &format!("No servers matched the query {}", &executable.on))?])
+                    .embeds(&[create_error_embed(
+                        "Could not find any servers",
+                        &format!("No servers matched the query {}", &executable.on),
+                    )?])
                     .unwrap()
                     .exec()
                     .await?;
@@ -147,12 +171,17 @@ async fn handle_event(
 
             for server in server_selector {
                 debug!("Sending to {}", server.0);
-                server
+                match server
                     .1
                     .lock()
                     .await
                     .send_server_command(executable.clone())
-                    .await;
+                    .await {
+                    Err(err) => {
+                        error!("Error sending packet to {}, {}", server.0, err.to_string())
+                    }
+                    _ => {}
+                };
             }
         }
         // Global command (does not affect 1 server)
@@ -169,7 +198,7 @@ async fn handle_event(
                 for (uuid, k) in ws_mgr
                     .lock()
                     .await
-                    .get_connected_by_guild(msg.guild_id.unwrap().to_string())
+                    .get_connected_by_ctrl_channel_id(msg.channel_id.to_string())
                     .await
                 {
                     fields.push(
@@ -201,6 +230,7 @@ async fn handle_event(
                     .unwrap()
                     .name
             );
+            ws_mgr.lock().await.set_get_http(http.clone()).await;
         }
         _ => {}
     }

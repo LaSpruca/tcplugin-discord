@@ -1,38 +1,48 @@
-use std::sync::Arc;
-
-use crate::discord::server_command::ServerCommand;
+use crate::{
+    discord::{create_embed, server_command::ServerCommand},
+    ws::packets::{ErrorType, IncomingPacket, OutgoingPacket},
+};
 use futures::prelude::*;
-use log::{debug, error, info};
-use tokio::sync::Mutex;
+use log::{debug, info, error};
+use std::sync::Arc;
 use tokio::{
     net::TcpStream,
-    sync::mpsc::{Receiver, Sender},
+    sync::{
+        mpsc::{error::SendError, Receiver, Sender},
+        Mutex,
+    },
 };
 use tokio_tungstenite::tungstenite::Message;
+use twilight_http::client::Client as HttpClient;
+use twilight_model::id::ChannelId;
 use uuid::Uuid;
-
-use crate::ws::packets::{ErrorType, IncomingPacket, OutgoingPacket};
 
 #[derive(Clone)]
 pub struct WsClient {
     outgoing_stream: Sender<OutgoingPacket>,
     pub(super) name: String,
-    pub(super) guild_id: String,
+    pub(super) ctrl_channel_id: String,
     uuid: Uuid,
     pub(super) alive: bool,
+    discord: Arc<HttpClient>,
 }
 
 impl WsClient {
     /// Scaffold out a new client and start the main event loop
-    pub(super) async fn new(uuid: Uuid, stream: TcpStream) -> Arc<Mutex<WsClient>> {
+    pub(super) async fn new(
+        uuid: Uuid,
+        get_http: Arc<HttpClient>,
+        stream: TcpStream,
+    ) -> Arc<Mutex<WsClient>> {
         let (outgoing_stream, incoming_stream) = tokio::sync::mpsc::channel::<OutgoingPacket>(16);
 
         let gamer = Arc::new(Mutex::new(Self {
             outgoing_stream,
             name: Default::default(),
-            guild_id: Default::default(),
+            ctrl_channel_id: Default::default(),
             uuid,
             alive: true,
+            discord: get_http,
         }));
 
         tokio::spawn(Self::main_loop(gamer.clone(), stream, incoming_stream));
@@ -63,8 +73,18 @@ impl WsClient {
                     } else {
                         let mut lock = this.lock().await;
                         lock.kill();
-                        sender.send(Message::Close(None)).await;
-                        sender.close().await;
+                        match sender.send(Message::Close(None)).await {
+                            Err(_) => {
+                                error!("Error sending close message");
+                            }
+                            _ => {}
+                        };
+                        match sender.close().await {
+                            Err(_) => {
+                                error!("Error closing server socket");
+                            }
+                            _ => {},
+                        };
                         break;
                     }
                 },
@@ -83,11 +103,29 @@ impl WsClient {
         match parsed {
             IncomingPacket::SetName(new_name) => {
                 info!("Set name to: {} for {}", &new_name, self.uuid.to_string());
+                if !self.ctrl_channel_id.is_empty() {
+                    self.discord
+                        .create_message(ChannelId::new(632402187112153090).unwrap())
+                        .embeds(&[create_embed("Server online", Some(&self.name), vec![]).unwrap()])
+                        .unwrap()
+                        .exec()
+                        .await
+                        .unwrap();
+                }
                 self.name = new_name;
             }
-            IncomingPacket::SetServer(guild_id) => {
-                info!("Set server to: {} for {}", &guild_id, self.uuid.to_string());
-                self.guild_id = guild_id;
+            IncomingPacket::SetControlChannel(ctrl_channel_id) => {
+                info!("Set server to: {} for {}", &ctrl_channel_id, self.uuid.to_string());
+                if !self.name.is_empty() {
+                    self.discord
+                        .create_message(ChannelId::new(632402187112153090).unwrap())
+                        .embeds(&[create_embed("Server online", Some(&self.name), vec![]).unwrap()])
+                        .unwrap()
+                        .exec()
+                        .await
+                        .unwrap();
+                }
+                self.ctrl_channel_id = ctrl_channel_id;
             }
             IncomingPacket::InvalidID => {
                 self.outgoing_stream
@@ -111,10 +149,13 @@ impl WsClient {
         }
     }
 
-    pub async fn send_server_command(&self, exec: ServerCommand) {
+    pub async fn send_server_command(
+        &self,
+        exec: ServerCommand,
+    ) -> Result<(), SendError<OutgoingPacket>> {
         self.outgoing_stream
             .send(OutgoingPacket::ServerRun(exec))
-            .await;
+            .await
     }
 
     pub fn get_name(&self) -> String {
